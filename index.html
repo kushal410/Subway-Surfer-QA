@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2D Car Runner Prototype</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #222;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: sans-serif;
+            overflow: hidden;
+        }
+        #gameCanvas {
+            border: 4px solid #fff;
+            background-color: #333;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas" width="400" height="600"></canvas>
+
+<script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+
+    // 1. Setup Lanes and Player
+    const LANES = [80, 200, 320]; // Center X coordinate of each lane
+    let currentLane = 1;          // Start in the middle lane (index 1)
+
+    let player = {
+        x: LANES[currentLane],
+        y: 500,
+        width: 45,
+        height: 75,
+        color: "#007bff" // Blue car
+    };
+
+    // 2. Obstacles (Enemy cars)
+    let obstacle = {
+        x: LANES[Math.floor(Math.random() * LANES.length)],
+        y: -100,
+        width: 45,
+        height: 75,
+        speed: 5,
+        color: "#dc3545" // Red car
+    };
+
+    let score = 0;
+    let gameOver = false;
+
+    // 3. Control Event Listener (Left / Right Arrow Keys)
+    window.addEventListener("keydown", (e) => {
+        if (gameOver) {
+            if (e.key === "Enter" || e.key === " ") {
+                resetGame();
+            }
+            return;
+        }
+
+        if (e.key === "ArrowLeft" && currentLane > 0) {
+            currentLane--;
+        } else if (e.key === "ArrowRight" && currentLane < 2) {
+            currentLane++;
+        }
+    });
+
+    // 4. Reset Function
+    function resetGame() {
+        currentLane = 1;
+        player.x = LANES[currentLane];
+        obstacle.y = -100;
+        obstacle.x = LANES[Math.floor(Math.random() * LANES.length)];
+        obstacle.speed = 5;
+        score = 0;
+        gameOver = false;
+    }
+
+    // 5. Main Game Loop
+    function update() {
+        if (!gameOver) {
+            // Smoothly slide player to the selected lane X coordinate
+            let targetX = LANES[currentLane];
+            player.x += (targetX - player.x) * 0.3;
+
+            // Move obstacle down the screen
+            obstacle.y += obstacle.speed;
+
+            // Reset obstacle when it leaves the screen
+            if (obstacle.y > canvas.height) {
+                obstacle.y = -100;
+                obstacle.x = LANES[Math.floor(Math.random() * LANES.length)];
+                score++;
+                obstacle.speed += 0.4; // Make the game faster and harder
+            }
+
+            // Simple Collision Detection (AABB bounding box)
+            // Centering correction adjustment since player.x is the center of the car
+            let pLeft = player.x - player.width / 2;
+            let pRight = player.x + player.width / 2;
+            let oLeft = obstacle.x - obstacle.width / 2;
+            let oRight = obstacle.x + obstacle.width / 2;
+
+            if (pLeft < oRight && pRight > oLeft && player.y < obstacle.y + obstacle.height && player.y + player.height > obstacle.y) {
+                gameOver = true;
+            }
+        }
+    }
+
+    // 6. Draw everything on Canvas
+    function draw() {
+        // Clear screen with asphalt gray
+        ctx.fillStyle = "#3a3a3a";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Draw Lane Strips (Road lines)
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 4;
+        ctx.setLineDash([20, 20]); // Dashed line effect
+        
+        ctx.beginPath();
+        ctx.moveTo(140, 0); ctx.lineTo(140, canvas.height);
+        ctx.moveTo(260, 0); ctx.lineTo(260, canvas.height);
+        ctx.stroke();
+
+        // Draw Player Car
+        ctx.fillStyle = player.color;
+        ctx.fillRect(player.x - player.width / 2, player.y, player.width, player.height);
+
+        // Draw Obstacle Car
+        ctx.fillStyle = obstacle.color;
+        ctx.fillRect(obstacle.x - obstacle.width / 2, obstacle.y, obstacle.width, obstacle.height);
+
+        // Draw Score UI
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 24px Arial";
+        ctx.setLineDash([]); // Reset line dashes so text isn't weird
+        ctx.fillText(`Score: ${score}`, 20, 40);
+
+        // Game Over Overlay
+        if (gameOver) {
+            ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = "#ffc107";
+            ctx.font = "bold 30px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2 - 20);
+            
+            ctx.fillStyle = "#ffffff";
+            ctx.font = "18px Arial";
+            ctx.fillText("Press SPACEBAR or ENTER to Restart", canvas.width / 2, canvas.height / 2 + 20);
+            ctx.textAlign = "left"; // Reset alignment
+        }
+    }
+
+    function loop() {
+        update();
+        draw();
+        requestAnimationFrame(loop);
+    }
+
+    // Start the game loop
+    loop();
+</script>
+
+</body>
+</html>
