@@ -3,69 +3,71 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Neon Subway Surfer Prototype</title>
+    <title>Subway Surfers: Modern Winter Edition</title>
     <style>
         body {
             margin: 0;
-            background-color: #05050a;
+            background-color: #080c14;
             display: flex;
             justify-content: center;
             align-items: center;
             height: 100vh;
-            font-family: 'Century Gothic', sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             overflow: hidden;
             user-select: none;
         }
         #gameCanvas {
-            border: 4px solid #1a1a2e;
-            border-radius: 12px;
-            background-color: #0a0a16;
-            box-shadow: 0 0 40px rgba(255, 0, 128, 0.2);
+            border-radius: 16px;
+            background: radial-gradient(circle at center, #1b2735 0%, #090a0f 100%);
+            box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8), 0 0 40px rgba(255, 255, 255, 0.05);
         }
     </style>
 </head>
 <body>
 
-    <canvas id="gameCanvas" width="500" height="700"></canvas>
+    <canvas id="gameCanvas" width="540" height="760"></canvas>
 
 <script>
     const canvas = document.getElementById("gameCanvas");
     const ctx = canvas.getContext("2d");
 
-    // --- GAME STATE ---
-    const LANES = [100, 250, 400]; // Lane X targets
+    // --- PSEUDO-3D CORE MATRICES ---
+    const LANES_3D = [-160, 0, 160]; // Virtual 3D world space X offsets
+    const HORIZON_Y = 260;           // Camera Vanishing focal point height
+    const CAM_DEPTH = 350;           // Lens compression depth factor
+    
     let currentLane = 1;
     let score = 0;
-    let coinsCollected = 0;
+    let coins = 0;
     let gameOver = false;
-    let speed = 8;
-    let gameDistance = 0;
+    let gameSpeed = 6.5;              // Carefully tuned velocity for velvety smooth movement
+    let runCyclePhase = 0;           // Driver variable for the leg/arm animations
 
-    // --- PLAYER OBJECT ---
+    // --- CHARACTER STRUCTURE ---
     let player = {
-        x: LANES[currentLane],
-        y: 580,
-        targetX: LANES[currentLane],
-        width: 35,
-        height: 60,
-        jumpY: 0,
+        worldX: LANES_3D[currentLane],
+        targetWorldX: LANES_3D[currentLane],
+        screenY: 630,
+        width: 40,
+        height: 75,
+        jumpZ: 0,                    // Upward displacement factor
         vy: 0,
         isJumping: false,
-        hasHoverboard: false,
-        boardDuration: 0
+        hasBoard: false,
+        boardEnergy: 0,
+        tiltAngle: 0
     };
 
-    // --- ARRAYS ---
-    let entities = []; // Holds trains, barriers, and coins
-    let particles = []; // Sparkles and board trails
+    let entities = [];
+    let particles = [];
+    let sceneryElements = [];        // Ambient background props (Trees, mountain paths)
 
-    // --- CONTROLS ---
+    // --- EVENT CONTROLLERS ---
     window.addEventListener("keydown", (e) => {
         if (gameOver) {
-            if (e.key === "Enter") resetGame();
+            if (e.key === "Enter") resetEngine();
             return;
         }
-
         if ((e.key === "ArrowLeft" || e.key.toLowerCase() === "a") && currentLane > 0) {
             currentLane--;
         }
@@ -73,302 +75,411 @@
             currentLane++;
         }
         if ((e.key === "ArrowUp" || e.key === " ") && !player.isJumping) {
-            player.vy = -14; // Jump force
+            player.vy = -12.5;
             player.isJumping = true;
         }
-        if (e.key === "Shift" && !player.hasHoverboard) {
-            player.hasHoverboard = true;
-            player.boardDuration = 400; // Lasts for 400 frames
-            createExplosion(player.x, player.y + 20, "#00ffff", 15);
+        if (e.key === "Shift" && !player.hasBoard) {
+            player.hasBoard = true;
+            player.boardEnergy = 450;
+            spawnExplosion(canvas.width / 2 + player.worldX * (CAM_DEPTH / (CAM_DEPTH + 500)), player.screenY, "#00f0ff", 25);
         }
-        player.targetX = LANES[currentLane];
+        player.targetWorldX = LANES_3D[currentLane];
     });
 
-    function resetGame() {
+    function resetEngine() {
         currentLane = 1;
-        player.x = LANES[currentLane];
-        player.targetX = LANES[currentLane];
-        player.jumpY = 0;
+        player.worldX = LANES_3D[currentLane];
+        player.targetWorldX = LANES_3D[currentLane];
+        player.jumpZ = 0;
         player.vy = 0;
         player.isJumping = false;
-        player.hasHoverboard = false;
+        player.hasBoard = false;
         entities = [];
         particles = [];
+        sceneryElements = [];
         score = 0;
-        coinsCollected = 0;
-        speed = 8;
+        coins = 0;
+        gameSpeed = 6.5;
         gameOver = false;
     }
 
-    // --- SPAWNER ENGINE ---
-    function spawnEntity() {
-        if (Math.random() < 0.04) {
-            let typeRand = Math.random();
-            let randLane = Math.floor(Math.random() * 3);
-            let entityType = "barrier";
-
-            if (typeRand < 0.4) entityType = "coin";
-            else if (typeRand < 0.75) entityType = "train";
-
-            // Prevent stacking items directly on top of each other at start
-            if (entities.filter(e => e.lane === randLane && e.z < 200).length === 0) {
-                entities.push({
-                    lane: randLane,
-                    z: 0, // Depth parameter (0 = distant horizon, 700 = screen bottom)
-                    type: entityType,
-                    collected: false
-                });
-            }
-        }
-    }
-
-    function createExplosion(x, y, color, count) {
-        for(let i=0; i<count; i++) {
+    // --- VFX PARTICLE SPAWN ENGINE ---
+    function spawnExplosion(x, y, color, total) {
+        for(let i = 0; i < total; i++) {
             particles.push({
-                x, y,
-                vx: (Math.random() - 0.5) * 6,
-                vy: (Math.random() - 0.5) * 6,
-                size: Math.random() * 4 + 1,
+                x: x, y: y,
+                vx: (Math.random() - 0.5) * 8,
+                vy: (Math.random() - 0.5) * 8,
+                radius: Math.random() * 4 + 1.5,
                 color: color,
-                alpha: 1
+                alpha: 1,
+                decay: Math.random() * 0.02 + 0.015
             });
         }
     }
 
-    // --- CORE LOOP PHYSICS ---
+    // --- MATHEMATICAL TRANSLATION ENGINE ---
+    function transform3D(worldX, worldZ, entityHeight = 0) {
+        // Perspective calculation matrix projection equations
+        let scale = CAM_DEPTH / (CAM_DEPTH + worldZ);
+        let screenX = (canvas.width / 2) + (worldX * scale);
+        let screenY = HORIZON_Y + (worldZ * scale) - (entityHeight * scale);
+        return { x: screenX, y: screenY, scale: scale };
+    }
+
+    // --- CORE RUNTIME LOGIC ---
     function update() {
         if (gameOver) return;
 
-        gameDistance += speed;
-        score = Math.floor(gameDistance / 10);
+        score++;
+        runCyclePhase += 0.18; // Drives human gait animation rhythm
 
-        // Interpolation for smooth side-to-side lane sliding
-        player.x += (player.targetX - player.x) * 0.25;
+        // Smoothly interpolate lane-changing slide weight with roll tilt physics
+        let previousX = player.worldX;
+        player.worldX += (player.targetWorldX - player.worldX) * 0.18;
+        player.tiltAngle = (player.worldX - previousX) * 0.08;
 
-        // Jump physics arc
+        // Gravity kinematics execution loop
         if (player.isJumping) {
-            player.jumpY += player.vy;
-            player.vy += 0.7; // Gravity acceleration
-            if (player.jumpY >= 0) {
-                player.jumpY = 0;
+            player.jumpZ -= player.vy;
+            player.vy += 0.6; 
+            if (player.jumpZ <= 0) {
+                player.worldZ = 0;
+                player.jumpZ = 0;
                 player.vy = 0;
                 player.isJumping = false;
             }
         }
 
-        // Hoverboard duration mechanics
-        if (player.hasHoverboard) {
-            player.boardDuration--;
-            // Neon pink/blue running trails
-            particles.push({
-                x: player.x + (Math.random() * 20 - 10),
-                y: player.y + 10,
-                vx: (Math.random() - 0.5) * 2,
-                vy: Math.random() * 2 + 2,
-                size: Math.random() * 3 + 2,
-                color: Math.random() > 0.5 ? "#ff007f" : "#00ffff",
-                alpha: 1
-            });
-            if (player.boardDuration <= 0) player.hasHoverboard = false;
+        // Hoverboard tracking management loop
+        if (player.hasBoard) {
+            player.boardEnergy--;
+            // Spray luminous cyan engine vapors under deck
+            if (Math.random() < 0.4) {
+                let pos = transform3D(player.worldX, 500, player.jumpZ);
+                particles.push({
+                    x: pos.x + (Math.random() * 16 - 8), y: pos.y + 10,
+                    vx: (Math.random() - 0.5) * 2, vy: Math.random() * 2 + 1,
+                    radius: Math.random() * 5 + 2, color: "#00f0ff", alpha: 0.7, decay: 0.02
+                });
+            }
+            if (player.boardEnergy <= 0) player.hasBoard = false;
         }
 
-        // Update active particles
+        // Continually generate white ambient background snow drift particles
+        if (Math.random() < 0.3) {
+            particles.push({
+                x: Math.random() * canvas.width, y: 0,
+                vx: Math.random() * 1 - 0.5, vy: Math.random() * 2 + 2,
+                radius: Math.random() * 2.5 + 1, color: "#ffffff", alpha: 0.6, decay: 0.001
+            });
+        }
+
+        // Particle clean up sequence loop
         for (let i = particles.length - 1; i >= 0; i--) {
             let p = particles[i];
             p.x += p.vx; p.y += p.vy;
-            p.alpha -= 0.03;
-            if (p.alpha <= 0) particles.splice(i, 1);
+            p.alpha -= p.decay;
+            if (p.alpha <= 0 || p.y > canvas.height) particles.splice(i, 1);
         }
 
-        // Object generation tick
-        spawnEntity();
+        // --- ENEMY/ASSET SCENERY PIPELINE ---
+        if (Math.random() < 0.03) {
+            let side = Math.random() > 0.5 ? 1 : -1;
+            sceneryElements.push({
+                worldX: side * (260 + Math.random() * 100),
+                worldZ: 0,
+                type: "tree"
+            });
+        }
+        sceneryElements.forEach(tree => tree.worldZ += gameSpeed);
+        sceneryElements = sceneryElements.filter(t => t.worldZ < 650);
 
-        // Process Objects approaching the viewport
+        // Track generation algorithms
+        if (Math.random() < 0.04) {
+            let laneIndex = Math.floor(Math.random() * 3);
+            let rnd = Math.random();
+            let type = "barrier";
+            if (rnd < 0.45) type = "coin";
+            else if (rnd < 0.8) type = "train";
+
+            entities.push({
+                worldX: LANES_3D[laneIndex],
+                worldZ: 0,
+                lane: laneIndex,
+                type: type,
+                pulse: Math.random() * 10
+            });
+        }
+
+        // Process Objects approaching viewport matrix context
         for (let i = entities.length - 1; i >= 0; i--) {
             let e = entities[i];
-            e.z += speed; // Bring objects closer
+            e.worldZ += gameSpeed;
+            e.pulse += 0.1;
 
-            // Calculate pseudo-3D perspective mapping transformations
-            let screenX = canvas.width / 2 + (LANES[e.lane] - canvas.width / 2) * (e.z / 600);
-            let screenY = 220 + (e.z * 0.65);
-            let sizeScale = (e.z / 600);
-
-            // Collision check window (when object reaches player depth)
-            if (e.z > 530 && e.z < 590 && e.lane === currentLane) {
-                if (e.type === "coin" && !e.collected) {
-                    e.collected = true;
-                    coinsCollected++;
-                    createExplosion(screenX, screenY, "#ffd700", 8);
-                    entities.splice(i, 1);
-                    continue;
-                } 
-                else if (e.type === "barrier" && player.jumpY > -25) { // Hit obstacle on ground
-                    handleCrash(i);
-                } 
-                else if (e.type === "train" && (!player.isJumping || player.jumpY > -50)) { // Hit train
-                    handleCrash(i);
+            // Trigger structural hit calculations near player interaction window
+            if (e.worldZ >= 470 && e.worldZ <= 520) {
+                if (e.lane === currentLane) {
+                    if (e.type === "coin") {
+                        coins++;
+                        let pos = transform3D(e.worldX, e.worldZ, 30);
+                        spawnExplosion(pos.x, pos.y, "#ffd700", 12);
+                        entities.splice(i, 1);
+                        continue;
+                    } 
+                    else if (e.type === "barrier" && player.jumpZ < 35) {
+                        mitigateCrashImpact(i);
+                    } 
+                    else if (e.type === "train" && player.jumpZ < 75) {
+                        mitigateCrashImpact(i);
+                    }
                 }
             }
 
-            // Clean up off-screen assets
-            if (e.z > 700) entities.splice(i, 1);
+            // Drop out obsolete arrays
+            if (e.worldZ > 600) entities.splice(i, 1);
         }
-
-        // Gradually increase pacing velocity over time
-        if (score % 100 === 0 && speed < 16) speed += 0.01;
     }
 
-    function handleCrash(index) {
-        if (player.hasHoverboard) {
-            player.hasHoverboard = false; // Break shield
-            player.boardDuration = 0;
-            createExplosion(player.x, player.y, "#ff0055", 25);
-            entities.splice(index, 1); // Delete obstacle crashed into
+    function mitigateCrashImpact(index) {
+        if (player.hasBoard) {
+            player.hasBoard = false;
+            player.boardEnergy = 0;
+            let pos = transform3D(player.worldX, 500, player.jumpZ);
+            spawnExplosion(pos.x, pos.y, "#ff0055", 30);
+            entities.splice(index, 1); // Disintegrate obstacle to save run
         } else {
             gameOver = true;
+            let pos = transform3D(player.worldX, 500, player.jumpZ);
+            spawnExplosion(pos.x, pos.y, "#ff5500", 35);
         }
     }
 
-    // --- RENDERING ART MATRICES ---
+    // --- ARTISTIC GRAPHICS RENDERING MATRIX ---
     function draw() {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#0c1322"; // Midnight frost base
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        // Sky & Neon Horizon Gradient
-        let skyGrad = ctx.createLinearGradient(0, 0, 0, 220);
-        skyGrad.addColorStop(0, "#020208");
-        skyGrad.addColorStop(1, "#18002a");
-        ctx.fillStyle = skyGrad;
-        ctx.fillRect(0, 0, canvas.width, 220);
-
-        // City Horizon Distant Lights
-        ctx.fillStyle = "#2c003e";
-        ctx.fillRect(40, 180, 50, 40);
-        ctx.fillRect(120, 150, 70, 70);
-        ctx.fillRect(320, 160, 60, 60);
-
-        // Pseudo-3D Perspective Railway Tracks
-        ctx.strokeStyle = "#3f3f5a";
-        ctx.lineWidth = 3;
+        // 1. Draw Clean White Snow Ground Map Plane
+        ctx.fillStyle = "#f2f6fa";
         ctx.beginPath();
-        // Lane vanishing guide dividers lines
-        ctx.moveTo(canvas.width / 2, 220); ctx.lineTo(-100, canvas.height);
-        ctx.moveTo(canvas.width / 2, 220); ctx.lineTo(130, canvas.height);
-        ctx.moveTo(canvas.width / 2, 220); ctx.lineTo(370, canvas.height);
-        ctx.moveTo(canvas.width / 2, 220); ctx.lineTo(600, canvas.height);
-        ctx.stroke();
+        ctx.moveTo(canvas.width / 2, HORIZON_Y);
+        ctx.lineTo(0, canvas.height);
+        ctx.lineTo(canvas.width, canvas.height);
+        ctx.closePath();
+        ctx.fill();
 
-        // Render oncoming items using scale projection math
-        entities.forEach(e => {
-            if (e.collected) return;
+        // 2. Draw 3D Modern Substructure Rail Tracks
+        ctx.strokeStyle = "#cbd5e1";
+        ctx.lineWidth = 2;
+        LANES_3D.forEach(lx => {
+            let ptFar = transform3D(lx, 0);
+            let ptNear = transform3D(lx, 600);
+            
+            // Core track ballast path
+            ctx.strokeStyle = "rgba(148, 163, 184, 0.4)";
+            ctx.lineWidth = 14 * ptNear.scale;
+            ctx.beginPath();
+            ctx.moveTo(ptFar.x, ptFar.y);
+            ctx.lineTo(ptNear.x, ptNear.y);
+            ctx.stroke();
 
-            let scale = (e.z / 600);
-            let screenX = canvas.width / 2 + (LANES[e.lane] - canvas.width / 2) * scale;
-            let screenY = 220 + (e.z * 0.65);
-            let w = 60 * scale;
-            let h = 80 * scale;
-
-            ctx.save();
-            if (e.type === "coin") {
-                // Gold Coin Mesh
-                ctx.fillStyle = "#ffd700";
-                ctx.shadowBlur = 10;
-                ctx.shadowColor = "#ffcc00";
-                ctx.beginPath();
-                ctx.arc(screenX, screenY - 10, 12 * scale, 0, Math.PI * 2);
-                ctx.fill();
-            } 
-            else if (e.type === "barrier") {
-                // Construction striped wooden barrier unit
-                ctx.fillStyle = "#ff6b6b";
-                ctx.fillRect(screenX - w/2, screenY - h/3, w, h/4);
-                ctx.fillStyle = "#000";
-                ctx.fillRect(screenX - w/4, screenY - h/3, w/2, 4); // Stripes
-            } 
-            else if (e.type === "train") {
-                // Transit Freight Subway Car block
-                let trainGrad = ctx.createLinearGradient(screenX - w/2, 0, screenX + w/2, 0);
-                trainGrad.addColorStop(0, "#0052d4");
-                trainGrad.addColorStop(1, "#4364f7");
-                ctx.fillStyle = trainGrad;
-                ctx.fillRect(screenX - w/2, screenY - h, w, h);
-                // Windshield window grill
-                ctx.fillStyle = "#00f2fe";
-                ctx.fillRect(screenX - w/3, screenY - h + 10 * scale, (w/3)*2, 15 * scale);
-            }
-            ctx.restore();
+            // Steel rails lines inside track space
+            ctx.strokeStyle = "#64748b";
+            ctx.lineWidth = 3 * ptNear.scale;
+            ctx.beginPath();
+            ctx.moveTo(ptFar.x - 10 * ptFar.scale, ptFar.y);
+            ctx.lineTo(ptNear.x - 10 * ptNear.scale, ptNear.y);
+            ctx.moveTo(ptFar.x + 10 * ptFar.scale, ptFar.y);
+            ctx.lineTo(ptNear.x + 10 * ptNear.scale, ptNear.y);
+            ctx.stroke();
         });
 
-        // Draw FX Trails Buffer
+        // 3. Render Distant Horizon Scenery Props (Pine Trees)
+        sceneryElements.forEach(tree => {
+            let pt = transform3D(tree.worldX, tree.worldZ, 0);
+            let th = 90 * pt.scale;
+            let tw = 45 * pt.scale;
+
+            ctx.fillStyle = "#1e3a1e"; // Dark emerald foliage
+            ctx.beginPath();
+            ctx.moveTo(pt.x, pt.y - th);
+            ctx.lineTo(pt.x + tw/2, pt.y - th/3);
+            ctx.lineTo(pt.x - tw/2, pt.y - th/3);
+            ctx.closePath();
+            ctx.fill();
+            // Trunk layer
+            ctx.fillStyle = "#4a2c11";
+            ctx.fillRect(pt.x - tw/8, pt.y - th/3, tw/4, th/3);
+        });
+
+        // 4. Render Projectile Obstacles & Coin Clusters
+        entities.forEach(e => {
+            let pt = transform3D(e.worldX, e.worldZ, 0);
+            
+            if (e.type === "coin") {
+                let coinH = 30 + Math.sin(e.pulse) * 6; // Float sway model
+                let cPt = transform3D(e.worldX, e.worldZ, coinH);
+                let r = 12 * cPt.scale;
+
+                ctx.save();
+                ctx.translate(cPt.x, cPt.y);
+                let coinGrad = ctx.createRadialGradient(-r/3, -r/3, 1, 0, 0, r);
+                coinGrad.addColorStop(0, "#fff176");
+                coinGrad.addColorStop(1, "#f57f17");
+                ctx.fillStyle = coinGrad;
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = "#fbc02d";
+                ctx.beginPath();
+                ctx.arc(0, 0, r, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+            } 
+            else if (e.type === "barrier") {
+                let bw = 75 * pt.scale;
+                let bh = 45 * pt.scale;
+                
+                ctx.save();
+                // Futuristic cyber barrier geometry mesh layout
+                ctx.fillStyle = "#e11d48"; // Safety crimson highlight
+                ctx.fillRect(pt.x - bw/2, pt.y - bh, bw, bh * 0.3);
+                ctx.fillStyle = "#0f172a";
+                ctx.fillRect(pt.x - bw/2 + 6, pt.y - bh + (bh * 0.3), bw - 12, bh * 0.7);
+                ctx.restore();
+            } 
+            else if (e.type === "train") {
+                let tw = 100 * pt.scale;
+                let th = 150 * pt.scale;
+                
+                ctx.save();
+                let trainGrad = ctx.createLinearGradient(pt.x - tw/2, 0, pt.x + tw/2, 0);
+                trainGrad.addColorStop(0, "#1e40af");
+                trainGrad.addColorStop(0.5, "#3b82f6");
+                trainGrad.addColorStop(1, "#1d4ed8");
+                ctx.fillStyle = trainGrad;
+                ctx.fillRect(pt.x - tw/2, pt.y - th, tw, th);
+
+                // Modern glowing neon windshield block
+                ctx.fillStyle = "#22d3ee";
+                ctx.shadowBlur = 10;
+                ctx.shadowColor = "#06b6d4";
+                ctx.fillRect(pt.x - tw/2.5, pt.y - th + 15 * pt.scale, (tw/2.5)*2, 25 * pt.scale);
+                ctx.restore();
+            }
+        });
+
+        // 5. Render Particle Simulation Array
         particles.forEach(p => {
             ctx.save();
             ctx.globalAlpha = p.alpha;
             ctx.fillStyle = p.color;
             ctx.beginPath();
-            ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+            ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
             ctx.fill();
             ctx.restore();
         });
 
-        // --- DRAW ACTIVE SURFER CHARACTER ---
+        // 6. --- RENDER KINEMATIC HUMANOID CHARACTER ---
+        let pPos = transform3D(player.worldX, 500, player.jumpZ);
         ctx.save();
-        let py = player.y + player.jumpY;
+        ctx.translate(pPos.x, pPos.y);
+        ctx.rotate(player.tiltAngle);
+        
+        let s = pPos.scale; // Scaling multi-factor base index
 
-        // Hoverboard Sprite Base Active Mount
-        if (player.hasHoverboard) {
-            let boardGrad = ctx.createLinearGradient(player.x - 20, 0, player.x + 20, 0);
-            boardGrad.addColorStop(0, "#00ffff");
-            boardGrad.addColorStop(1, "#ff007f");
-            ctx.fillStyle = boardGrad;
-            ctx.shadowBlur = 12;
-            ctx.shadowColor = "#00ffff";
-            ctx.fillRect(player.x - 22, py + 8, 44, 8); // Board deck
+        // Hoverboard module base deck setup
+        if (player.hasBoard) {
+            ctx.fillStyle = "#06b6d4";
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = "#00f0ff";
+            ctx.fillRect(-22 * s, 2 * s, 44 * s, 6 * s);
             ctx.shadowBlur = 0;
         }
 
-        // Character Main Body Silhouette
-        ctx.fillStyle = "#e94560"; // Vibrant hoodie jacket
-        ctx.fillRect(player.x - player.width / 2, py - player.height, player.width, player.height);
-        // Head / Cap asset block
-        ctx.fillStyle = "#ffcd94";
-        ctx.fillRect(player.x - 10, py - player.height - 18, 20, 18);
-        ctx.fillStyle = "#0f3460"; // Cool blue cap
-        ctx.fillRect(player.x - 12, py - player.height - 22, 24, 6);
+        // Kinematic variables based on execution step phase cycles
+        let legSwing = Math.sin(runCyclePhase) * 16 * s;
+        let armSwing = Math.cos(runCyclePhase) * 14 * s;
+
+        if (player.isJumping) {
+            // Modify components layout dynamically to represent compact jump reactions
+            legSwing = 5 * s; 
+            armSwing = -12 * s; 
+        }
+
+        // Components: Left Leg / Right Leg
+        ctx.fillStyle = "#1e293b"; // Dark denim leg trousers
+        ctx.fillRect(-12 * s, -24 * s, 8 * s, (24 * s) + (player.isJumping ? -4*s : legSwing));
+        ctx.fillRect(4 * s, -24 * s, 8 * s, (24 * s) + (player.isJumping ? -4*s : -legSwing));
+
+        // Components: Torso Jacket Frame
+        ctx.fillStyle = "#f43f5e"; // Vibrant insulated parka jacket coat
+        ctx.fillRect(-15 * s, -64 * s, 30 * s, 40 * s);
+
+        // Components: Left Arm / Right Arm vectors
+        ctx.fillStyle = "#e11d48";
+        ctx.fillRect(-21 * s, -62 * s, 6 * s, 25 * s + armSwing);
+        ctx.fillRect(15 * s, -62 * s, 6 * s, 25 * s - armSwing);
+
+        // Components: Human Head Globe structure assembly
+        ctx.fillStyle = "#ffcca3"; // Flesh tone composite
+        ctx.beginPath();
+        ctx.arc(0, -74 * s, 10 * s, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Component: Protective Street Cap headwear accent
+        ctx.fillStyle = "#0f172a";
+        ctx.fillRect(-12 * s, -85 * s, 24 * s, 6 * s); // Brim frame cap overlay
 
         ctx.restore();
 
-        // --- TERMINAL HUD USER INTERFACE ---
-        ctx.fillStyle = "#ffffff";
-        ctx.font = "bold 20px sans-serif";
-        ctx.fillText(`SCORE: ${score.toString().padStart(5, '0')}`, 25, 40);
-        
-        ctx.fillStyle = "#ffd700";
-        ctx.fillText(`COINS: ${coinsCollected}`, 25, 70);
+        // 7. --- MODERN FLAT GRAPHICS TERMINAL HUD OVERLAY ---
+        ctx.fillStyle = "rgba(15, 23, 42, 0.75)";
+        ctx.fillRect(20, 20, 180, 85);
+        ctx.strokeStyle = "rgba(255,255,255,0.1)";
+        ctx.strokeRect(20, 20, 180, 85);
 
-        if (player.hasHoverboard) {
-            ctx.fillStyle = "#00ffff";
-            ctx.font = "bold 13px sans-serif";
-            ctx.fillText(`HOVERBOARD ENERGY: ${player.boardDuration}`, 25, 100);
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 13px -apple-system, sans-serif";
+        ctx.fillText("MULTIPLIER SCORE", 35, 42);
+        ctx.font = "black 24px monospace";
+        ctx.fillStyle = "#38bdf8";
+        ctx.fillText(score.toString().padStart(6, '0'), 35, 68);
+
+        ctx.fillStyle = "#fbbf24";
+        ctx.font = "bold 14px sans-serif";
+        ctx.fillText(`🪙 COINS: ${coins}`, 35, 92);
+
+        // Render clean glowing bar metrics overlay if board parameters verified
+        if (player.hasBoard) {
+            ctx.fillStyle = "rgba(0,0,0,0.4)";
+            ctx.fillRect(20, 115, 180, 8);
+            ctx.fillStyle = "#22d3ee";
+            ctx.fillRect(20, 115, 180 * (player.boardEnergy / 450), 8);
         }
 
-        // Game Over Panel Window Overlay
+        // Game Over Cinematic Dim Panel Window Overlay
         if (gameOver) {
-            ctx.fillStyle = "rgba(5, 5, 15, 0.9)";
+            ctx.fillStyle = "rgba(4, 7, 12, 0.92)";
             ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            ctx.fillStyle = "#ff0055";
-            ctx.font = "bold 42px sans-serif";
+            ctx.fillStyle = "#f43f5e";
+            ctx.font = "bold 36px -apple-system, sans-serif";
             ctx.textAlign = "center";
-            ctx.fillText("CAUGHT BY INSPECTOR", canvas.width / 2, canvas.height / 2 - 20);
+            ctx.fillText("RUN TERMINATED", canvas.width / 2, canvas.height / 2 - 25);
+            
+            ctx.fillStyle = "#94a3b8";
+            ctx.font = "16px sans-serif";
+            ctx.fillText(`Total Wealth Earned: ${coins} Gold Coins`, canvas.width / 2, canvas.height / 2 + 15);
             
             ctx.fillStyle = "#ffffff";
-            ctx.font = "18px sans-serif";
-            ctx.fillText(`Final Score: ${score}`, canvas.width / 2, canvas.height / 2 + 25);
-            ctx.fillText("Press ENTER key to Run Again", canvas.width / 2, canvas.height / 2 + 60);
+            ctx.font = "600 15px sans-serif";
+            ctx.fillText("PRESS ENTER TO RESTART GAME SEQUENCE", canvas.width / 2, canvas.height / 2 + 65);
             ctx.textAlign = "left";
         }
     }
 
-    // --- TIMESTEP CLOCK LOOP ---
+    // --- TIMESTEP FRAME LOOP ENGINE ---
     function loop() {
         update();
         draw();
